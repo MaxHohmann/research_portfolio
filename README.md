@@ -3,24 +3,26 @@
 
 **Cognitive Neuroscience · Psychophysics · EEG · Computational Methods**
 
-
 This repository contains selected examples of my research code and
 experimental work in cognitive neuroscience, psychophysics, and visual
 perception.
-
 
 My research interests center on how **attention, expectations, and
 recurrent neural dynamics shape visual perception and conscious
 experience**.
 
-
 The projects included here demonstrate experience across the full
 experimental workflow, from **experimental design and stimulus
 presentation to behavioral and neural data analysis**.
 
+
 ---
 
-## Selected projects
+## Selected projects:
+
+- Rapid Serial Motion Detection
+- Hierarchical Frequency Tagging
+- NeuroSpecMMBTS
 
 ### 1. Rapid Serial Motion Detection
 
@@ -40,6 +42,7 @@ The experimental implementation integrates:
 
 [View project →](./RapidSerialMotionDetection/)
 
+
 ---
 
 ### 2. Hierarchical Frequency Tagging
@@ -53,6 +56,7 @@ levels.
 
 [View project →](./Hierarchical_Frequency_Tagging/)
 
+
 ---
 
 ### 3. NeuroSpecMMBTS
@@ -63,7 +67,8 @@ of frequency-specific visual processing.
 The project provides examples of quantitative approaches for extracting
 and characterizing temporal and spectral structure in neural data.
 
-[View project →](./NeurospecMMBTS-main/)
+[View project →](./NeurospecMMBTS/)
+
 
 ---
 
@@ -72,31 +77,8 @@ and characterizing temporal and spectral structure in neural data.
 | Area | Experience |
 |---|---|
 | Experimental control | MWorks, PsychoPy |
-| EEG analysis | MNE-Python, MATLAB |
-| Frequency analysis | FFT, spectral analysis, SSVEP |
 | Psychophysics | Visual detection, motion perception, binocular rivalry |
 | Eye tracking | EyeLink |
 | Programming | Python, MATLAB |
 | Statistical analysis | Python, MATLAB |
-| Signal processing | Filtering, spectral decomposition, surrogate methods |
 | Experimental design | Attention, perception, frequency tagging |
-
----
-
-## Research approach
-
-My work combines **psychophysics with neural measurements** to
-investigate the mechanisms underlying visual perception.
-
-A particular interest is the relationship between:
-
-```text
-Sensory evidence
-       ↓
-Neural representations
-       ↓
-Recurrent / predictive processing
-       ↓
-Perceptual inference
-       ↓
-Conscious visual experience
