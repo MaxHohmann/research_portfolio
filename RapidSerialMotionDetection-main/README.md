@@ -1,1 +1,0 @@
-# Rapid Serial Motion Detection
