@@ -1,0 +1,1653 @@
+// ------------------------------------------------------------------------------------------------
+//  OSCILLATORY PUPIL DILATION PROJECT - EXPERIMENT
+// ------------------------------------------------------------------------------------------------
+/*
+Version :   1.0.0
+Date    :   27/10/2026
+Author  :   Maximilian Hohmann
+            mhohmann@dpz.eu
+            maximilian.hohmann@stud.uni-goettingen.de
+        
+
+DESCRIPTION:
+
+Display     : Left half of the screen is white, right half is black, separated by a narrow grey strip
+              in the centre. A central fixation point sits on the strip.
+Stimuli     : On each side two superimposed random dot patterns (RDP) are shown: a grey and a blue
+              one, both 100 % coherent, whose directions differ by 90 deg. Both sides initially
+              show the same directions.
+Cue         : An arrow next to the fixation point points to the left or to the right (random).
+Target      : A simultaneous colour change AND motion direction change on ONE side (valid = cued side,
+              invalid = opposite side). Two target configurations:
+              - BOUND   : the same RDP (grey or blue) changes colour and direction.
+              - UNBOUND : one RDP changes colour, the OTHER RDP on the same side changes direction.
+              The carrier RDP (grey / blue) is counterbalanced. Directions always rotate AWAY from the
+              other RDP, so the two RDPs never merge into the same direction.
+Task        : Participants hold the response button (trigger) during the trial and RELEASE it as fast as
+              possible when the target occurs. Holding through the response window on catch trials is
+              correct; releasing before the target or during a catch trial is an error.
+SOA         : Cue onset -> target onset = CTRL_SOA_min_ms + bin * CTRL_SOA_step_ms. Every bin occurs
+              equally often in every design cell (tIDs, random without replacement), i.e. uniform
+              sampling over all time intervals.
+Catch trials: With probability CTRL_catch_prob a trial contains no target (the nominal SOA still
+              defines the start of the response window). Catch trials are rejected from the selection,
+              so the design cells stay balanced.
+Design cells: tIDs = 1 : (8 * CTRL_SOA_bins)
+                SOA bin   = (tID-1) % bins
+                valid     = floor((tID-1) / bins) % 2
+                bound     = floor((tID-1) / (2*bins)) % 2        (0 = unbound, 1 = bound)
+                carrier   = floor((tID-1) / (4*bins)) % 2        (0 = grey, 1 = blue)
+Eye tracking: As in OPD_experiment.mwel (EyeLink, blink correction, drift correction before each trial).
+              A fixation break or an early release aborts the trial; it is repeated later.
+*/
+
+
+
+// ------------------------------------------------------------------------------------------------
+//  IO Devices
+// ------------------------------------------------------------------------------------------------
+
+// ---------- Display ----------
+stimulus_display 'Stimulus Display' (BG_r, BG_g, BG_b)
+
+
+// ---------- Eyelink ----------
+eyelink Eyelink (
+
+    data_interval                           = 1ms
+    eye_rx                                  = EYE_right_x_raw
+    eye_ry                                  = EYE_right_y_raw
+    eye_lx                                  = EYE_left_x_raw
+    eye_ly                                  = EYE_left_y_raw 
+    eye_x                                   = EYE_x_raw
+    eye_y                                   = EYE_y_raw 
+    href_rx                                 = EYE_href_right_x
+    href_ry                                 = EYE_href_right_y
+    href_lx                                 = EYE_href_left_x
+    href_ly                                 = EYE_href_left_y
+    pupil_rx                                = EYE_pupil_right_x
+    pupil_ry                                = EYE_pupil_right_y
+    pupil_lx                                = EYE_pupil_left_x
+    pupil_ly                                = EYE_pupil_left_y
+    pupil_size_r                            = EYE_pupil_right_size
+    pupil_size_l                            = EYE_pupil_left_size
+    eye_time                                = EYE_sample_time
+    tracking_dist                           = 1024
+    tracker_ip                              = '100.1.1.1'
+)
+
+
+// ---------- Eye Calibrator ----------
+standard_eye_calibrator EyeCalibrator (
+
+    eyeh_raw                                = EYE_x_raw
+    eyev_raw                                = EYE_y_raw
+    eyeh_calibrated                         = EYE_x_dva 
+    eyev_calibrated                         = EYE_y_dva
+)
+
+
+// ---------- Eye Monitor ----------
+basic_eye_monitor EyeMonitor (
+
+    eyeh_calibrated                         = EYE_x_dva
+    eyev_calibrated                         = EYE_y_dva
+    eye_state                               = EYE_saccade
+    width_samples                           = 5
+    saccade_entry_speed                     = 50
+    saccade_exit_speed                      = 20
+)
+
+
+// ---------- Gamepad ----------
+iodevice/usbhid_generic gamePad (
+
+    preferred_location_id                   = 1
+    usage_page                              = 1
+    usage                                   = 4
+    log_all_input_values                    = false
+    autostart                               = true
+) {
+    // Buttons
+    usbhid_generic_input_channel (usage_page = 9; usage = 4; value = IO_gpButton4)
+    usbhid_generic_input_channel (usage_page = 9; usage = 2; value = IO_gpButton2)
+}
+
+
+
+// ------------------------------------------------------------------------------------------------
+//  Variables
+// ------------------------------------------------------------------------------------------------
+
+// ---------- Input ----------
+group Condition {
+
+    var EXP_note                            = "OscillatoryPupilDilationProject"
+    var EXP_version                         = "1.0.0"
+
+    var EXP_session                         = "main"        // train, main
+
+    var EXP_correct_input                   = true          // validate input
+    var EXP_use_eye_tracking                = true          // enable eye tracking
+    var EXP_debugging                       = false         // enable reports
+
+    // Info
+    var INFO_trials_accepted                = 0             // number of accapted trials
+    var INFO_hit                            = 0             // number of hits
+    var INFO_miss                           = 0             // number of misses
+    var INFO_falseAlarm                     = 0             // number of false alarms
+    var INFO_correctRejection               = 0             // number of correct rejection
+    var INFO_earlyResponse                  = 0             // number of early responses
+    var INFO_fixationBreak                  = 0             // number of fixation break trials
+}
+
+
+// ---------- Trial ----------
+group TRIAL {
+
+    var TRIAL_start                         = 0
+    var TRIAL_end                           = 0
+    var TRIAL_number                        = 0
+    var TRIAL_total                         = 0
+    var ML_sync                             = 0
+
+    var TRIAL_tID                           = 0             // design cell of this trial
+    var TRIAL_catch                         = 0             // 1 = catch trial (no target)
+    var TRIAL_type                          = ""            // bound, unbound, catch
+    var TRIAL_validity                      = ""            // valid, invalid, catch
+    var TRIAL_cue_side                      = ""            // left, right
+    var TRIAL_target_side                   = ""            // left, right, none
+    var TRIAL_carrier                       = ""            // grey, blue (RDP carrying the colour change)
+   
+    var TRIAL_SOA_bin                       = 0
+    var TRIAL_SOA_ms                        = 0             // nominal SOA
+    var TRIAL_SOA_true_ms                   = 0             // measured SOA (frame times)
+    
+    var TRIAL_cue_us                        = 0
+    var TRIAL_target_us                     = 0
+    var TRIAL_target_onset                  = 0             // marker: target (or catch pseudo-target) onset
+    var TRIAL_target_shown                  = 0
+    
+    var TRIAL_RT_ms                         = 0
+    
+    var TRIAL_outcome                       = ""            // hit, miss, falseAlarm, correctRejection, earlyResponse, fixationBreak
+
+    var TRIAL_ITI_ms                        = 0             // inter trial interval (depending on trial outcome)
+    var TRIAL_last_break                    = 0             // update trial number of last break
+}
+
+
+// ---------- Design ----------
+group DES {
+
+    var DES_valid                           = 0             // cue validity
+    var DES_bound                           = 0             // change bound to one RDP
+    var DES_carrier                         = 0             // 0 = grey, 1 = blue
+    var DES_cue_right                       = 0             // cue location
+    var DES_target_right                    = 0             // target location
+
+    var DES_init_dir                        = 0             // condition of initial direction and RDP on top
+    
+    var DES_gray_dir_init                   = 0
+    var DES_blue_dir_init                   = 0
+    var DES_gray_dir_chng                   = 0
+    var DES_blue_dir_chng                   = 0
+
+    var DES_chng_col_gray                   = 0
+    var DES_chng_col_blue                   = 0
+    var DES_chng_dir_gray                   = 0
+    var DES_chng_dir_blue                   = 0
+}
+
+
+// ---------- Gamepad ----------
+group Gamepad {
+
+    var IO_gpButton2                        = 0
+    var IO_gpButton4                        = 0
+}
+
+
+// ---------- Eye Tracking ----------
+group EYE { 
+
+    // eyelink
+    var EYE_right_x_raw                     = (float)(0)(persistant = YES)
+    var EYE_right_y_raw                     = (float)(0)(persistant = YES)
+    var EYE_left_x_raw                      = (float)(0)(persistant = YES)
+    var EYE_left_y_raw                      = (float)(0)(persistant = YES)
+    var EYE_x_raw                           = (float)(0)(persistant = YES)
+    var EYE_y_raw                           = (float)(0)(persistant = YES)
+    var EYE_href_right_x                    = (integer)(0)(persistant = YES)
+    var EYE_href_right_y                    = (integer)(0)(persistant = YES)
+    var EYE_href_left_x                     = (integer)(0)(persistant = YES)
+    var EYE_href_left_y                     = (integer)(0)(persistant = YES)
+    var EYE_pupil_right_x                   = (integer)(0)(persistant = YES)
+    var EYE_pupil_right_y                   = (integer)(0)(persistant = YES)
+    var EYE_pupil_left_x                    = (integer)(0)(persistant = YES)
+    var EYE_pupil_left_y                    = (integer)(0)(persistant = YES)
+    var EYE_pupil_right_size                = (integer)(0)(persistant = YES)
+    var EYE_pupil_left_size                 = (integer)(0)(persistant = YES)
+    var EYE_sample_time                     = (integer)(0)(persistant = YES)
+    
+    // calibrator
+    var EYE_x_dva                           = (float)(0)(persistant = YES)
+    var EYE_y_dva                           = (float)(0)(persistant = YES)     
+
+    // monitor
+    var EYE_saccade                         = (integer)(0)(persistant = YES)
+    var IO_fixation_flag                    = false
+}
+
+
+// ---------- Calibration ----------
+group Calibration {
+
+    var CALIB_value                         = 0
+    var CALIB_count                         = 0
+    var CALIB_total                         = 12
+    var CALIB_ITI_ms                        = 900
+    var CALIB_FixHold_ms                    = 900
+}
+
+
+// ---------- Control ----------
+group CTRL {
+
+    // fixation
+    var CTRL_Fix_width_dva                  = 50                        // default for calibration (diameter)        
+
+    // design
+    var CTRL_SOA_bins                       = 81                        // number of SOA bins
+    var CTRL_SOA_min_ms                     = 1000                      // shortest cue-target SOA
+    var CTRL_SOA_step_frames                = 3                         // bin width in frames (3 frames = 25 ms @ 120 Hz)
+    var CTRL_selection_total                = 8 * CTRL_SOA_bins         // all design cells (valid x bound x carrier x soa bins)
+    var CTRL_trial_total                    = CTRL_selection_total      // accepted trials main session
+    var CTRL_trial_total_train              = 100                       // accepted trials training
+    var CTRL_catch_prob                     = 0.25                      // probability of a catch trial
+
+    // formula to compute precise timing
+    var CTRL_refresh_rate                   = 120                                       // frame rate in Hz
+    var CTRL_frame_ms                       = 2/CTRL_refresh_rate * 1000                // two frame buffer time
+    var CTRL_frame_buffer_us                = CTRL_frame_ms * 1000 + CTRL_frame_ms * 100    // time buffer for precise timer
+    var CTRL_SOA_step_ms                    = CTRL_SOA_step_frames / CTRL_refresh_rate * 1000
+
+    
+    // timer
+    var CTRL_ISI_ms                         = 300                       // inter stimulus interval
+    var CTRL_initial_ms                     = 500                       // stable display before cue onset
+    var CTRL_target_ms                      = 125                       // target change duration
+    var CTRL_response_window_ms             = 900                       // response window after target onset
+    
+    var CTRL_ITI_correct_ms                 = 600                       // ITI for hit and correct rejection
+    var CTRL_ITI_wrong_ms                   = 600                       // ITI for miss and false alarm
+    var CTRL_ITI_abort_ms                   = 600                       // ITI for early response and fixation break
+
+
+    // target
+    var CTRL_dir_chng_deg                   = 90                        // direction change of the target RDP
+
+    // other
+    var CTRL_progress                       = ''                        // text to display trial progress
+}
+
+
+// ---------- Color ----------
+group Color {
+
+    // background
+    var BG_r                                = 0.5
+    var BG_g                                = 0.5
+    var BG_b                                = 0.5
+
+    // text
+    var TXT_r                               = 1.0
+    var TXT_g                               = 1.0
+    var TXT_b                               = 1.0
+
+    // RDP colours
+    var COL_gray                            = '0.23,0.23,0.23'      // initial grey color
+    var COL_blue                            = '0.25,0.25,1'         // initial blue color
+
+    var COL_gray_chng                       = '0.73,0.23,0.23'      // changed grey color
+    var COL_blue_chng                       = '0.75,0.25,1'         // initial blue color
+}
+
+
+// ---------- Screen ----------
+group SCREEN {
+
+    var SCREEN_L_col                        = 1             // left half: white
+    var SCREEN_L_width_dva                  = 80            // width
+    var SCREEN_L_height_dva                 = 80            // height
+
+    var SCREEN_R_col                        = 0             // right half: black
+    var SCREEN_R_width_dva                  = 80            // width
+    var SCREEN_R_height_dva                 = 80            // height
+
+    var SCREEN_strip_col                    = 0.5           // right half: black
+    var SCREEN_strip_width_dva              = 1             // width
+    var SCREEN_strip_height_dva             = 80            // height
+}
+
+
+// ---------- Fixation Point ----------
+group fixationPoint {
+
+    var FixPoint_alpha                      = 1
+    var FixPoint_r                          = 1
+    var FixPoint_g                          = 1
+    var FixPoint_b                          = 1
+    var FixPoint_size                       = .2
+    var FixPoint_pos_x                      = 0
+    var FixPoint_pos_y                      = 0
+}
+
+
+// ---------- Random Dot Pattern ----------
+group RDP {
+
+    var RDP_space                           = "linear"      // linear motion
+    var RDP_radius                          = 3
+
+    var RDP_pos_x_L                         = -10           // x position of the left pair
+    var RDP_pos_x_R                         = 10            // x position of the right pair
+    var RDP_pos_y                           = 0 
+    var RDP_pos_z                           = 0
+
+    var RDP_dot_num                         = 60            // dots per RDP
+    var RDP_dot_size                        = 0.3
+    var RDP_dot_lifetime                    = -1
+    var RDP_speed                           = 6
+
+    var RDP_alpha                           = 1   
+
+    var RDP_L_gray_color                    = COL_gray
+    var RDP_L_blue_color                    = COL_blue
+    var RDP_R_gray_color                    = COL_gray
+    var RDP_R_blue_color                    = COL_blue
+
+    var RDP_L_gray_dir                      = 0
+    var RDP_L_blue_dir                      = 0
+    var RDP_R_gray_dir                      = 0
+    var RDP_R_blue_dir                      = 0
+}
+
+
+// ---------- Cue ----------
+group CUE (
+
+    var CUE_size                            = 2
+    var CUE_pos_x                           = 0         // cue at the center
+    var CUE_pos_y                           = 2         // cue over fixation point
+    var CUE_alpha                           = 1
+)
+
+
+// ---------- Selection ----------
+group Selection {
+
+    // design cells: SOA bin x validity x bound/unbound x carrier
+    selection tIDs (
+        values                              = 1:CTRL_selection_total
+        selection                           = random_without_replacement
+        nsamples                            = 1
+        sampling_method                     = cycles
+        advance_on_accept                   = YES
+        autoreset                           = YES
+    )
+
+    // calibration location
+    selection EYE_pos (
+        values                              = 1:CALIB_total
+        selection                           = random_without_replacement
+        nsamples                            = 1
+        sampling_method                     = cycles
+        advance_on_accept                   = YES
+        autoreset                           = YES
+    )
+}
+
+
+
+// ------------------------------------------------------------------------------------------------
+//  Sounds
+// ------------------------------------------------------------------------------------------------
+
+wav_file Acquire_sound (
+    path                                    = './sounds/FixAcquired.wav'
+    amplitude                               = 1.0
+)
+
+wav_file Fixation_sound (
+    path                                    = './sounds/FixAccepted.wav'
+    amplitude                               = 1.0
+)
+
+wav_file FixBreak_sound (
+    path                                    = './sounds/failure.wav'
+    amplitude                               = 1.0
+)
+
+wav_file Hit_sound (
+    path                                    = './sounds/hit.wav'
+    amplitude                               = 1.0
+)
+
+wav_file Miss_sound (
+    path                                    = './sounds/miss.wav'
+    amplitude                               = 1.0
+)
+
+
+
+// ------------------------------------------------------------------------------------------------
+//  Stimuli
+// ------------------------------------------------------------------------------------------------
+
+// ---------- Blank Screen ----------
+blank_screen Background (
+
+    color                                   = BG_r, BG_g, BG_b
+    )
+
+
+// ---------- Screen ----------
+stimulus/rectangle FIELD_left (
+
+    color                                   = SCREEN_L_col, SCREEN_L_col, SCREEN_L_col
+    x_size                                  = SCREEN_L_width_dva
+    y_size                                  = SCREEN_L_height_dva
+    x_position                              = -0.5 * SCREEN_L_width_dva
+    y_position                              = 0
+    rotation                                = 0
+    alpha_multiplier                        = 1
+)
+
+stimulus/rectangle FIELD_right (
+
+    color                                   = SCREEN_R_col, SCREEN_R_col, SCREEN_R_col
+    x_size                                  = SCREEN_R_width_dva
+    y_size                                  = SCREEN_R_height_dva
+    x_position                              = 0.5 * SCREEN_R_width_dva
+    y_position                              = 0
+    rotation                                = 0
+    alpha_multiplier                        = 1
+)
+
+stimulus/rectangle FIELD_strip (
+
+    color                                   = SCREEN_strip_col, SCREEN_strip_col, SCREEN_strip_col
+    x_size                                  = SCREEN_strip_width_dva
+    y_size                                  = SCREEN_strip_height_dva
+    x_position                              = 0
+    y_position                              = 0
+    rotation                                = 0
+    alpha_multiplier                        = 1
+)
+
+
+// ---------- Fixation Point ----------
+stimulus/circular_fixation_point fixationPoint (
+
+    trigger_width                           = CTRL_Fix_width_dva
+    trigger_watch_x                         = EYE_x_dva
+    trigger_watch_y                         = EYE_y_dva
+    trigger_flag                            = IO_fixation_flag
+    x_size                                  = FixPoint_size
+    y_size                                  = FixPoint_size
+    x_position                              = FixPoint_pos_x
+    y_position                              = FixPoint_pos_y
+    color                                   = FixPoint_r, FixPoint_g, FixPoint_b
+    rotation                                = 0
+    alpha_multiplier                        = FixPoint_alpha
+)
+
+
+// ---------- Random Dot Patterns ----------
+stimulus/d_r_d RDP_L_gray (
+
+    RDP_type                                = RDP_space
+    field_radius                            = RDP_radius
+    field_center_x                          = RDP_pos_x_L
+    field_center_y                          = RDP_pos_y
+    field_center_z                          = RDP_pos_z
+    num_dots                                = RDP_dot_num
+    dot_size                                = RDP_dot_size
+    dot_lifetime                            = RDP_dot_lifetime
+    color                                   = RDP_L_gray_color
+    alpha_multiplier                        = RDP_alpha
+    direction                               = RDP_L_gray_dir
+    direction_lifetime                      = -1
+    speed                                   = RDP_speed
+    speed_lifetime                          = -1
+    reinitialize                            = 0
+    version                                 = -1
+)
+
+stimulus/d_r_d RDP_L_blue (
+
+    RDP_type                                = RDP_space
+    field_radius                            = RDP_radius
+    field_center_x                          = RDP_pos_x_L
+    field_center_y                          = RDP_pos_y
+    field_center_z                          = RDP_pos_z
+    num_dots                                = RDP_dot_num
+    dot_size                                = RDP_dot_size
+    dot_lifetime                            = RDP_dot_lifetime
+    color                                   = RDP_L_blue_color
+    alpha_multiplier                        = RDP_alpha
+    direction                               = RDP_L_blue_dir
+    direction_lifetime                      = -1
+    speed                                   = RDP_speed
+    speed_lifetime                          = -1
+    reinitialize                            = 0
+    version                                 = -1
+)
+
+stimulus/d_r_d RDP_R_gray (
+
+    RDP_type                                = RDP_space
+    field_radius                            = RDP_radius
+    field_center_x                          = RDP_pos_x_R
+    field_center_y                          = RDP_pos_y
+    field_center_z                          = RDP_pos_z
+    num_dots                                = RDP_dot_num
+    dot_size                                = RDP_dot_size
+    dot_lifetime                            = RDP_dot_lifetime
+    color                                   = RDP_R_gray_color
+    alpha_multiplier                        = RDP_alpha
+    direction                               = RDP_R_gray_dir
+    direction_lifetime                      = -1
+    speed                                   = RDP_speed
+    speed_lifetime                          = -1
+    reinitialize                            = 0
+    version                                 = -1
+)
+
+stimulus/d_r_d RDP_R_blue (
+
+    RDP_type                                = RDP_space
+    field_radius                            = RDP_radius
+    field_center_x                          = RDP_pos_x_R
+    field_center_y                          = RDP_pos_y
+    field_center_z                          = RDP_pos_z
+    num_dots                                = RDP_dot_num
+    dot_size                                = RDP_dot_size
+    dot_lifetime                            = RDP_dot_lifetime
+    color                                   = RDP_R_blue_color
+    alpha_multiplier                        = RDP_alpha
+    direction                               = RDP_R_blue_dir
+    direction_lifetime                      = -1
+    speed                                   = RDP_speed
+    speed_lifetime                          = -1
+    reinitialize                            = 0
+    version                                 = -1
+)
+
+// ---------- Cue ----------
+stimulus/image_file CUE_left (
+
+    path                                    = './stim/left_cue.png'
+    x_size                                  = CUE_size
+    y_size                                  = CUE_size
+    x_position                              = CUE_pos_x
+    y_position                              = CUE_pos_y
+    rotation                                = 0
+    alpha_multiplier                        = CUE_alpha
+    deferred                                = NO
+)
+
+stimulus/image_file CUE_right (
+
+    path                                    = './stim/right_cue.png'
+    x_size                                  = CUE_size
+    y_size                                  = CUE_size
+    x_position                              = CUE_pos_x 
+    y_position                              = CUE_pos_y
+    rotation                                = 0
+    alpha_multiplier                        = CUE_alpha
+    deferred                                = NO
+)
+
+
+// ---------- Start Text ----------
+stimulus/text start_txt (
+
+    text                                    = '\n\n\nPress and Hold the Response Buttons to Start the next Trial.'
+    font_name                               = Times
+    font_size                               = 30
+    text_alignment                          = center
+    x_size                                  = 10  
+    y_size                                  = 10
+    x_position                              = 0  
+    y_position                              = 3  
+    color                                   = TXT_r, TXT_g, TXT_b
+)
+
+
+// ---------- Fixation Text ----------
+stimulus/text fixation_txt (
+
+    text                                    = '\n\n\nFixation Break!'
+    font_name                               = Times
+    font_size                               = 30
+    text_alignment                          = center
+    x_size                                  = 10  
+    y_size                                  = 10
+    x_position                              = 0  
+    y_position                              = 3  
+    color                                   = TXT_r, TXT_g, TXT_b
+)
+
+
+// ---------- Break Text ----------
+stimulus/text break_txt (
+
+    text                                    = '\n\n\nBreak!'
+    font_name                               = Times
+    font_size                               = 30
+    text_alignment                          = center
+    x_size                                  = 10  
+    y_size                                  = 10
+    x_position                              = 0  
+    y_position                              = 3  
+    color                                   = TXT_r, TXT_g, TXT_b
+)
+
+
+// ---------- Trial Progress Text ----------
+stimulus/text progress_txt (
+
+    text                                    = CTRL_progress     // 'x / x Trials'
+    font_name                               = Times
+    font_size                               = 30
+    text_alignment                          = center
+    x_size                                  = 10  
+    y_size                                  = 10
+    x_position                              = 0  
+    y_position                              = 3
+    color                                   = TXT_r, TXT_g, TXT_b
+)
+
+
+// ---------- Exit Text ----------
+stimulus/text exit_txt (
+
+    text                                    = '\n\n\nExperiment Completed!'
+    font_name                               = Times
+    font_size                               = 30
+    text_alignment                          = center
+    x_size                                  = 10  
+    y_size                                  = 10
+    x_position                              = 0  
+    y_position                              = 3  
+    color                                   = TXT_r, TXT_g, TXT_b
+)
+
+
+
+// ------------------------------------------------------------------------------------------------
+//  EYE-TRACKER CALIBRATION
+// ------------------------------------------------------------------------------------------------
+
+protocol 'Calibration-12P' {
+
+    report ('=====> STARTING CALIBRATION <=====')
+    report ('Fixation Width: $CTRL_Fix_width_dva')
+
+    start_device_io (Eyelink)
+    clear_calibration (EyeCalibrator)
+
+    // reset counter
+    CALIB_count                             = 0
+
+
+    trial {
+
+        task 'Calibration Trial' {
+
+            // ------------------------------------------------------------------------------------
+            state CALIBRATION_HUB {
+
+                report ('-----> TRIAL ($(CALIB_count + 1) / $CALIB_total) <-----')
+
+                // exit 
+                goto (
+                    target                  = CALIBRATION_EXIT
+                    when                    = CALIB_count == CALIB_total
+                )
+
+                // next trial
+                goto (
+                    target                  = CALIBRATION_START
+                    when                    = CALIB_count < CALIB_total
+                )
+            }
+
+            // ------------------------------------------------------------------------------------
+            state CALIBRATION_START {
+
+                CALIB_value                 = EYE_pos
+                FixPoint_pos_x              = (((CALIB_value -1) % 4) - 1.5) * 5
+                FixPoint_pos_y              = (floor((CALIB_value - 1) / 4) - 1) * 5
+
+                
+                report ('Calibration Trial: Fixation Point ($FixPoint_pos_x / $FixPoint_pos_y)')
+                report ('Calibration Trial: Fixation Width = $CTRL_Fix_width_dva')
+
+                direct (CALIBRATION_PRE_ACQUIRE)
+            }
+
+            // ------------------------------------------------------------------------------------     
+            state CALIBRATION_PRE_ACQUIRE {
+
+                live_queue_stimulus (fixationPoint)
+
+                update_stimulus_display ()
+
+                goto (
+                    target                  = CALIBRATION_ACQUIRE
+                    when                    = IO_fixation_flag
+                )
+            }
+
+            // ------------------------------------------------------------------------------------      
+            state CALIBRATION_ACQUIRE {
+
+                report ('Calibration Trial: Pre Fixation Time ...')
+                report ('Calibration Trial: Fixation == $IO_fixation_flag')
+
+                start_timer (
+                    timer                   = AcquireTimer
+                    duration                = 250
+                    duration_units          = ms
+                )
+
+                goto (
+                    target                  = CALIBRATION_PRE_ACQUIRE
+                    when                    = NOT(IO_fixation_flag)
+                )
+
+                timer_expired (
+                    target                  = CALIBRATION_SAMPLE
+                    timer                   = AcquireTimer
+                )
+            }
+
+            // ------------------------------------------------------------------------------------          
+            state CALIBRATION_SAMPLE {
+
+                play_sound (Acquire_sound)
+
+                start_timer (
+                    timer                   = FixationTimer
+                    duration                = CALIB_FixHold_ms
+                    duration_units          = ms
+                )
+
+                begin_calibration_average (EyeCalibrator)
+
+                goto (
+                    target                  = CALIBRATION_REJECTED
+                    when                    = NOT(IO_fixation_flag)
+                )
+
+                timer_expired (
+                    target                  = CALIBRATION_ACCEPTED
+                    timer                   = FixationTimer
+                )
+            }
+
+            // ------------------------------------------------------------------------------------          
+            state CALIBRATION_ACCEPTED {
+
+                end_calibration_average_and_take_sample (
+                    calibrator              = EyeCalibrator
+                    calibratable_object     = fixationPoint
+                )
+                
+                play_sound (Fixation_sound)
+
+                dequeue_stimulus (fixationPoint)
+
+                update_stimulus_display ()
+
+                start_timer (
+                    timer                   = ITI_Timer
+                    duration                = CALIB_ITI_ms
+                    duration_units          = ms
+                )
+
+                // update counter
+                CALIB_count                 += 1
+
+                accept_selections (EYE_pos)
+
+                report ('Calibration Trial: Fixation Accepted!')
+
+                goto (
+                    target                  = CALIBRATION_HUB
+                    when                    = timer_expired(ITI_Timer)
+                )
+            }
+
+            // ------------------------------------------------------------------------------------         
+            state CALIBRATION_REJECTED {
+
+                end_calibration_average_and_ignore (
+                    calibrator              = EyeCalibrator
+                )
+
+                play_sound (FixBreak_sound)
+
+                dequeue_stimulus (fixationPoint)
+
+                update_stimulus_display ()
+
+                start_timer (
+                    timer                   = ITI_Timer
+                    duration                = CALIB_ITI_ms
+                    duration_units          = ms
+                )
+
+                report ('Calibration Trial: Fixation Rejected!')
+
+                reject_selections (EYE_pos)
+
+                goto (
+                    target                  = CALIBRATION_HUB
+                    when                    = timer_expired(ITI_Timer)
+                )
+            }
+
+            // ------------------------------------------------------------------------------------    
+            state CALIBRATION_EXIT {
+
+                update_stimulus_display ()
+
+                update_calibration (EyeCalibrator)
+
+                reset_selection (EYE_pos)
+
+                report ('CALIBRATION COMPLETED!')
+                report ('EXITING ...')
+
+                wait (
+                    duration                = CALIB_ITI_ms
+                    duration_units          = ms
+                )
+
+                stop_device_io (Eyelink)
+
+                yield ()
+            }
+        }            
+    }
+}
+
+
+
+// ------------------------------------------------------------------------------------------------
+//  Experiment Task 
+// ------------------------------------------------------------------------------------------------
+
+protocol 'Detection_Task' {
+
+    report ('=====> STARTING EXPERIMENT <=====')
+
+    // start devices
+    start_device_io (gamePad)
+
+    if_else {
+        // start eye tracking if enabled
+        if (EXP_use_eye_tracking == 1) {
+            report ('Eye-Tracking: enabled')
+            start_device_io (Eyelink)
+        }
+        // manually set fixation state 
+        else {       
+            report ('Eye-Tracking: disabled')                                
+            IO_fixation_flag                = true  
+        }
+    }
+
+    EXP_correct_input                       = true
+
+    // assign fixation point position
+    FixPoint_pos_x                          = 0
+    FixPoint_pos_y                          = 0
+
+    // reset TRIAL vars
+    TRIAL_start                             = 0
+    TRIAL_end                               = 0
+    TRIAL_number                            = 0
+    TRIAL_last_break                        = 0
+
+    // reset counter vars
+    INFO_trials_accepted                    = 0
+    INFO_hit                                = 0
+    INFO_miss                               = 0
+    INFO_falseAlarm                         = 0
+    INFO_correctRejection                   = 0
+    INFO_earlyResponse                      = 0
+    INFO_fixationBreak                      = 0
+
+    // rest selection vars
+    reset_selection (tIDs)
+    
+
+    trial {
+
+        task 'Trial' {
+
+            // ------------------------------------------------------------------------------------ 
+            state EXPERIMENT_START {
+                
+                live_queue_stimulus (Background)
+
+                live_queue_stimulus (FIELD_left)
+                live_queue_stimulus (FIELD_right)
+                live_queue_stimulus (FIELD_strip)
+
+                live_queue_stimulus (fixationPoint)
+
+                update_stimulus_display ()
+
+                // check refresh rate
+                if (CTRL_refresh_rate != round(refresh_rate())) {       
+                    report ('WARNING: Invalid Refresh Rate $(round(refresh_rate()))')
+                    EXP_correct_input       = false
+                }
+
+                // check session
+                if_else {
+                    // training
+                    if (EXP_session == "train") {
+                        TRIAL_total         = CTRL_trial_total_train
+                    }
+                    // main
+                    if (EXP_session == "main") {
+                        TRIAL_total         = CTRL_trial_total
+                    }
+                    // invalid input
+                    else {
+                        report ('WARNING: Invalid Attention Condition ($EXP_session)')
+                        EXP_correct_input   = false
+                    }
+                }
+
+                // report condition
+                report ('Refresh Rate: $(round(refresh_rate())) Hz')
+                report ('Session: $EXP_session ($TRIAL_total trials)')
+
+                // exit experiment in case of invalid input
+                goto (                    
+                    target                  = EXPERIMENT_EXIT
+                    when                    = (EXP_correct_input == false)
+                )
+
+                // start experiment task
+                direct (INITIATE_RDP)
+            }
+
+            // ------------------------------------------------------------------------------------
+            state INITIATE_RDP {
+
+                // randomize initial directions
+                DES_init_dir             = disc_rand(1,4)
+
+                if_else {
+                    if (DES_init_dir == 1) {
+                        // initial direction
+                        DES_gray_dir_init   = 315
+                        DES_blue_dir_init   = 45
+
+                        // assign direction change
+                        DES_gray_dir_chng   = DES_gray_dir_init - CTRL_dir_chng_deg
+                        DES_blue_dir_chng   = DES_blue_dir_init + CTRL_dir_chng_deg
+
+                        // blue on top
+                        live_queue_stimulus (RDP_L_gray)
+                        live_queue_stimulus (RDP_R_gray)
+
+                        live_queue_stimulus (RDP_L_blue)
+                        live_queue_stimulus (RDP_R_blue)
+                    }
+                    if (DES_init_dir == 2) {
+                        // initial direction
+                        DES_gray_dir_init   = 315
+                        DES_blue_dir_init   = 45
+
+                        // assign direction change
+                        DES_gray_dir_chng   = DES_gray_dir_init - CTRL_dir_chng_deg
+                        DES_blue_dir_chng   = DES_blue_dir_init + CTRL_dir_chng_deg
+
+                        // gray on top
+                        live_queue_stimulus (RDP_L_blue)
+                        live_queue_stimulus (RDP_R_blue)
+
+                        live_queue_stimulus (RDP_L_gray)
+                        live_queue_stimulus (RDP_R_gray) 
+                    }
+                    if (DES_init_dir == 3) {
+                        // initial direction
+                        DES_gray_dir_init   = 45
+                        DES_blue_dir_init   = 315
+
+                        // assign direction change
+                        DES_gray_dir_chng   = DES_gray_dir_init + CTRL_dir_chng_deg
+                        DES_blue_dir_chng   = DES_blue_dir_init - CTRL_dir_chng_deg
+
+                        // blue on top
+                        live_queue_stimulus (RDP_L_gray)
+                        live_queue_stimulus (RDP_R_gray)
+
+                        live_queue_stimulus (RDP_L_blue)
+                        live_queue_stimulus (RDP_R_blue)
+                    }
+                    if (DES_init_dir == 4) {
+                        // initial direction
+                        DES_gray_dir_init   = 45
+                        DES_blue_dir_init   = 315
+
+                        // assign direction change
+                        DES_gray_dir_chng   = DES_gray_dir_init + CTRL_dir_chng_deg
+                        DES_blue_dir_chng   = DES_blue_dir_init - CTRL_dir_chng_deg
+
+                        // gray on top
+                        live_queue_stimulus (RDP_L_blue)
+                        live_queue_stimulus (RDP_R_blue)
+
+                        live_queue_stimulus (RDP_L_gray)
+                        live_queue_stimulus (RDP_R_gray)
+                    }
+                }
+
+                // assign initial directions
+                RDP_L_gray_dir              = DES_gray_dir_init
+                RDP_R_gray_dir              = DES_gray_dir_init
+
+                RDP_L_blue_dir              = DES_blue_dir_init
+                RDP_R_blue_dir              = DES_blue_dir_init
+
+
+                live_queue_stimulus (fixationPoint)
+
+                update_stimulus_display ()
+
+                direct (TRIAL_HUB)    
+            }            
+
+            // ------------------------------------------------------------------------------------
+            state TRIAL_HUB {
+
+                CTRL_progress               = '$INFO_trials_accepted / $TRIAL_total Trials'
+
+                if_else {
+                    // first trial
+                    if (TRIAL_number == 0) {
+                        live_queue_stimulus (start_txt)
+                    }
+                    // all trials completed
+                    if (INFO_trials_accepted == TRIAL_total) {
+                        live_queue_stimulus (exit_txt)
+                    }
+                    // trial break
+                    if (TRIAL_number % 100 == 0 && TRIAL_number != TRIAL_last_break) {
+                        TRIAL_last_break    = TRIAL_number      // update trial number of last break
+                        live_queue_stimulus (progress_txt)
+                        live_queue_stimulus (break_txt)
+                    }
+                }
+
+                update_stimulus_display ()
+
+                dequeue_stimulus (progress_txt)
+                dequeue_stimulus (start_txt)
+                dequeue_stimulus (break_txt)
+                dequeue_stimulus (exit_txt)
+
+                wait (
+                    duration                = CTRL_ISI_ms*1000 - CTRL_frame_buffer_us + (next_frame_time() - now())
+                    duration_units          = us
+                )
+
+
+                // exit experiment
+                goto (                    
+                    target                  = EXPERIMENT_EXIT
+                    when                    = (INFO_trials_accepted == TRIAL_total) 
+                )
+
+                // next trial
+                goto (
+                    target                  = TRIAL_START
+                    when                    = (INFO_trials_accepted < TRIAL_total && IO_gpButton4 == 1 && IO_fixation_flag) 
+                )
+            }
+
+            // ------------------------------------------------------------------------------------
+            state TRIAL_START {
+
+                update_stimulus_display ()
+
+                ML_sync = 1
+
+                TRIAL_start                 += 1
+                TRIAL_number                += 1
+
+                TRIAL_outcome               = ""
+                TRIAL_RT_ms                 = -1
+                TRIAL_SOA_true_ms           = -1
+                TRIAL_target_onset          = 0
+                TRIAL_target_shown          = 0
+
+                report ('-----> TRIAL ($INFO_trials_accepted / $TRIAL_total) <-----')
+
+                start_timer (
+                    timer                   = Initial_Timer
+                    duration                = CTRL_initial_ms*1000 - CTRL_frame_buffer_us + (next_frame_time() - now())
+                    duration_units          = us
+                )
+
+                direct (ASSIGN_TRIAL_CONDITION)
+            }
+
+            // ------------------------------------------------------------------------------------
+            state ASSIGN_TRIAL_CONDITION {
+
+                // reset change flags
+                DES_chg_col_gray            = 0
+                DES_chg_col_blue            = 0
+                DES_chg_dir_gray            = 0
+                DES_chg_dir_blue            = 0
+
+                // design cell
+                TRIAL_tID                   = tIDs
+
+                TRIAL_SOA_bin               = (TRIAL_tID - 1) % CTRL_SOA_bins
+                TRIAL_SOA_ms                = CTRL_SOA_min_ms + TRIAL_SOA_bin * CTRL_SOA_step_ms
+                DES_valid                   = floor((TRIAL_tID - 1) / CTRL_SOA_bins) % 2
+                DES_bound                   = floor((TRIAL_tID - 1) / (2 * CTRL_SOA_bins)) % 2
+                DES_carrier                 = floor((TRIAL_tID - 1) / (4 * CTRL_SOA_bins)) % 2
+
+                TRIAL_catch                 = (rand() < CTRL_catch_prob)    // catch trial
+                DES_cue_right               = disc_rand(0, 1)               // cue and target side
+
+                if_else {
+                    // cue right + target right
+                    if (DES_valid == 1 && DES_cue_right == 1) {
+                        DES_target_right    = DES_cue_right
+
+                        TRIAL_cue_side      = "right"
+                        TRIAL_target_side   = "right"
+                        TRIAL_validity      = "valid"
+                    }
+
+                    // cue left + target left
+                    if (DES_valid == 1 && DES_cue_right == 0) {
+                        DES_target_right    = DES_cue_right
+
+                        TRIAL_cue_side      = "left"
+                        TRIAL_target_side   = "left"
+                        TRIAL_validity      = "valid"
+                    }
+
+                    // cue right + target left
+                    if (DES_valid == 0 && DES_cue_right == 1) {
+                        DES_target_right    = 1 - DES_cue_right
+
+                        TRIAL_cue_side      = "right"
+                        TRIAL_target_side   = "left"
+                        TRIAL_validity      = "invalid"
+                    }
+
+                    // cue left + target right
+                    if (DES_valid == 0 && DES_cue_right == 0) {
+                        DES_target_right    = 1 - DES_cue_right
+
+                        TRIAL_cue_side      = "left"
+                        TRIAL_target_side   = "right"
+                        TRIAL_validity      = "invalid"
+                    }
+                }
+
+
+                // randomize RDP change
+                if_else {
+                    // no catch trial
+                    if (TRIAL_catch == 0) {
+
+                        // color change not on carrier + bound
+                        if (DES_carrier == 0 && DES_bound == 1) {
+                            DES_chng_col_gray   = 1
+                            DES_chng_dir_gray   = 1
+
+                            TRIAL_type          = "bound"
+                            TRIAL_carrier       = "grey"
+                        }
+
+                        // color change on carrier + bound
+                        if (DES_carrier == 1 && DES_bound == 1) {
+                            DES_chng_col_blue   = 1
+                            DES_chng_dir_blue   = 1
+
+                            TRIAL_type          = "bound"
+                            TRIAL_carrier       = "blue"
+                        }
+
+                        // color change not on carrier + unbound
+                        if (DES_carrier == 0 && DES_bound == 0) {
+                            DES_chng_col_gray   = 1
+                            DES_chng_dir_blue   = 1
+
+                            TRIAL_type          = "unbound"
+                            TRIAL_carrier       = "grey"
+                        }
+
+                        // color change on carrier + unbound
+                        if (DES_carrier == 1 && DES_bound == 0) {
+                            DES_chng_col_blue   = 1
+                            DES_chng_dir_gray   = 1
+
+                            TRIAL_type          = "unbound"
+                            TRIAL_carrier       = "blue"
+                        }
+                    }
+                    // catch trial
+                    else {
+                        DES_chng_col_gray       = 0
+                        DES_chng_col_blue       = 0
+                        DES_chng_dir_gray       = 0
+                        DES_chng_dir_blue       = 0
+
+                        TRIAL_type              = "catch"
+                        TRIAL_carrier           = "none"
+                    }
+                }
+
+                TRIAL_outcome               = ""
+                TRIAL_RT_ms                 = -1
+                TRIAL_SOA_true_ms           = -1
+                TRIAL_target_onset          = 0
+                TRIAL_target_shown          = 0
+
+
+                report ('tID: $TRIAL_tID | type: $TRIAL_type | validity: $TRIAL_validity | cue: $TRIAL_cue_side | target: $TRIAL_target_side')
+                report ('carrier: $TRIAL_carrier | SOA: $TRIAL_SOA_ms ms | initial dirs: grey $DES_gray_dir_init, blue $DES_blue_dir_init')
+
+
+                // fixation lost
+                goto (
+                    target                  = FIXATION_BREAK
+                    when                    = (IO_fixation_flag == 0)
+                )
+
+                // button released
+                goto (
+                    target                  = EARLY_RESPONSE
+                    when                    = (IO_gpButton4 == 0)
+                )
+
+                // show cue
+                goto (
+                    target                  = CUE_ONSET
+                    when                    = (timer_expired(Initial_Timer) && IO_gpButton4 == 1)
+                )
+            }
+
+            // ------------------------------------------------------------------------------------
+            state CUE_ONSET {
+
+                if_else {
+                    if (DES_cue_right == 1) {
+                        live_queue_stimulus (CUE_right)
+                    }
+                    if (DES_cue_right == 0) {
+                        live_queue_stimulus (CUE_left)
+                    }
+                }
+
+                TRIAL_cue_us                = next_frame_time()
+
+                update_stimulus_display ()
+
+                // SOA timer
+                start_timer (
+                    timer                   = SOA_Timer
+                    duration                = TRIAL_SOA_ms*1000 - CTRL_frame_buffer_us + (next_frame_time() - now())
+                    duration_units          = us
+                )
+
+                // fixation lost
+                goto (
+                    target                  = FIXATION_BREAK
+                    when                    = (IO_fixation_flag == 0)
+                )
+
+                // button released
+                goto (
+                    target                  = EARLY_RESPONSE
+                    when                    = (IO_gpButton4 == 0)
+                )
+
+                // target onset
+                goto (
+                    target                  = TARGET_ONSET
+                    when                    = timer_expired(SOA_Timer)
+                )
+            }
+
+            // ------------------------------------------------------------------------------------
+            state TARGET_ONSET {
+
+                // realize target changes
+                if_else {
+                    // no catch trial + target left
+                    if (TRIAL_catch == 0 && DES_target_right == 0) {
+                        if_else {
+                            // gray color
+                            if (DES_chng_col_gray == 1) {
+                                RDP_L_gray_color    = COL_gray_chng
+                            }
+                            // blue color
+                            if (DES_chng_col_blue == 1) {
+                                RDP_L_blue_color    = COL_blue_chng
+                            }
+                            // gray direction
+                            if (DES_chng_dir_gray == 1) {
+                                RDP_L_gray_dir      = DES_gray_dir_chng
+                            }
+                            // blue direction
+                            if (DES_chng_dir_blue == 1) {
+                                RDP_L_blue_dir      = DES_blue_dir_chng
+                            }
+                        }
+
+                        TRIAL_target_shown      = 1
+                    }
+                    // no catch trial + target right
+                    if (TRIAL_catch == 0 && DES_target_right == 1) {
+                        if_else {
+                            // gray color
+                            if (DES_chng_col_gray == 1) {
+                                RDP_R_gray_color    = COL_gray_chng
+                            }
+                            // blue color
+                            if (DES_chng_col_blue == 1) {
+                                RDP_R_blue_color    = COL_blue_chng
+                            }
+                            // gray direction
+                            if (DES_chng_dir_gray == 1) {
+                                RDP_R_gray_dir      = DES_gray_dir_chng
+                            }
+                            // blue direction
+                            if (DES_chng_dir_blue == 1) {
+                                RDP_R_blue_dir      = DES_blue_dir_chng
+                            }
+                        }
+
+                        TRIAL_target_shown      = 1
+                    }
+                    // catch trial
+                    if (TRIAL_catch == 1) {
+                        TRIAL_target_shown      = 0
+                    }
+                }
+
+                
+                // compute cue onset duration
+                TRIAL_target_us             = next_frame_time()
+                TRIAL_SOA_true_ms           = (TRIAL_target_us - TRIAL_cue_us) / 1000
+
+                update_stimulus_display ()
+
+                TRIAL_target_onset          = 1
+
+                // timer for change duration
+                start_timer (
+                    timer                   = Target_Timer
+                    duration                = CTRL_target_ms*1000 - CTRL_frame_buffer_us + (next_frame_time() - now())
+                    duration_units          = us
+                )
+
+                // time for responses
+                start_timer (
+                    timer                   = Response_Timer
+                    duration                = CTRL_response_window_ms*1000 - CTRL_frame_buffer_us + (next_frame_time() - now())
+                    duration_units          = us
+                )
+
+                direct (RESPONSE_HUB)
+            }
+
+            // ------------------------------------------------------------------------------------
+            state RESPONSE_HUB {
+
+                // fixation lost
+                goto (
+                    target                  = FIXATION_BREAK
+                    when                    = (IO_fixation_flag == 0)
+                )
+
+                // button released after target
+                goto (
+                    target                  = HIT
+                    when                    = (IO_gpButton4 == 0 && TRIAL_catch == 0)
+                )
+
+                // button released on catch trial
+                goto (
+                    target                  = FALSE_ALARM
+                    when                    = (IO_gpButton4 == 0 && TRIAL_catch == 1)
+                )
+
+                // no response
+                goto (
+                    target                  = MISS
+                    when                    = (timer_expired(Response_Timer) == 1 && TRIAL_catch == 0)
+                )
+
+                // correct rejection of catch trial
+                goto (
+                    target                  = CORRECT_REJECTION
+                    when                    = (timer_expired(Response_Timer) == 1 && TRIAL_catch == 1)
+                )
+
+                // change back to initial colour and direction
+                goto (
+                    target                  = TARGET_OFFSET
+                    when                    = (timer_expired(Target_Timer) == 1 && TRIAL_target_shown == 1)
+                )
+            }
+
+            // ------------------------------------------------------------------------------------
+            state TARGET_OFFSET {
+
+                // reset changes
+                RDP_L_gray_dir              = DES_gray_dir_init
+                RDP_R_gray_dir              = DES_gray_dir_init
+                RDP_L_blue_dir              = DES_blue_dir_init
+                RDP_R_blue_dir              = DES_blue_dir_init
+
+                RDP_L_gray_color            = COL_gray
+                RDP_R_gray_color            = COL_gray
+                RDP_L_blue_color            = COL_blue
+                RDP_R_blue_color            = COL_blue
+
+                update_stimulus_display ()
+
+                TRIAL_target_shown          = 0
+
+                direct (RESPONSE_HUB)
+            }
+
+            // ------------------------------------------------------------------------------------
+            state HIT {
+
+                TRIAL_RT_ms                 = (now() - TRIAL_target_us) / 1000
+                TRIAL_outcome               = "hit"
+                INFO_hit                    += 1
+
+                play_sound (Hit_sound)
+
+                TRIAL_ITI_ms                = CTRL_ITI_correct_ms
+
+                accept_selections (tIDs)
+                INFO_trials_accepted        += 1
+
+                direct (TRIAL_EXIT)
+            }
+
+            // ------------------------------------------------------------------------------------
+            state MISS {
+
+                TRIAL_RT_ms                 = ''
+                TRIAL_outcome               = "miss"
+                INFO_miss                   += 1
+
+                play_sound (Miss_sound)
+
+                TRIAL_ITI_ms                = CTRL_ITI_wrong_ms
+
+                accept_selections (tIDs)
+                INFO_trials_accepted        += 1
+
+                direct (TRIAL_EXIT)
+            }
+
+            // ------------------------------------------------------------------------------------
+            state FALSE_ALARM {
+
+                TRIAL_RT_ms                 = (now() - TRIAL_target_us) / 1000
+                TRIAL_outcome               = "falseAlarm"
+                INFO_falseAlarm             += 1
+
+                play_sound (FixBreak_sound)
+
+                TRIAL_ITI_ms                = CTRL_ITI_wrong_ms
+
+                // catch trials never consume a design cell
+                reject_selections (tIDs)
+
+                direct (TRIAL_EXIT)
+            }
+
+            // ------------------------------------------------------------------------------------
+            state CORRECT_REJECTION {
+
+                TRIAL_RT_ms                 = ''
+                TRIAL_outcome               = "correctRejection"
+                INFO_correctRejection       += 1
+
+                play_sound (Hit_sound)
+
+                TRIAL_ITI_ms                = CTRL_ITI_correct_ms
+
+                // catch trials never consume a design cell
+                reject_selections (tIDs)
+
+                direct (TRIAL_EXIT)
+            }
+
+            // ------------------------------------------------------------------------------------
+            state EARLY_RESPONSE {
+                
+                TRIAL_RT_ms                 = ''
+                TRIAL_outcome               = "earlyResponse"
+                INFO_earlyResponse          += 1
+
+                play_sound (FixBreak_sound)
+
+                TRIAL_ITI_ms                = CTRL_ITI_abort_ms
+
+                // early response trials never consume a design cell
+                reject_selections (tIDs)
+
+                direct (TRIAL_EXIT)
+            }
+
+            // ------------------------------------------------------------------------------------
+            state FIXATION_BREAK {
+
+                TRIAL_RT_ms                 = ''
+                TRIAL_outcome               = "fixationBreak"
+                INFO_fixationBreak          += 1
+
+                play_sound (FixBreak_sound)
+
+                TRIAL_ITI_ms                = CTRL_ITI_abort_ms
+                
+                // fixation break trials never consume a design cell
+                reject_selections (tIDs)
+
+                direct (TRIAL_EXIT)
+            }
+
+            // ------------------------------------------------------------------------------------
+            state TRIAL_EXIT {
+                
+                report ('Trial Outcome: $TRIAL_outcome')
+                report ('RT: $TRIAL_RT_ms')
+
+                // reset stimuli to the initial state
+                dequeue_stimulus (CUE_left)
+                dequeue_stimulus (CUE_right)
+
+                RDP_L_gray_dir              = DES_gray_dir_init
+                RDP_R_gray_dir              = DES_gray_dir_init
+                RDP_L_blue_dir              = DES_blue_dir_init
+                RDP_R_blue_dir              = DES_blue_dir_init
+
+                RDP_L_gray_color            = COL_gray
+                RDP_R_gray_color            = COL_gray
+                RDP_L_blue_color            = COL_blue
+                RDP_R_blue_color            = COL_blue
+
+                TRIAL_target_shown          = 0
+
+                update_stimulus_display ()
+
+                TRIAL_end                   = TRIAL_start
+                ML_sync                     = 0
+
+                wait (
+                    duration                = TRIAL_ITI_ms
+                    duration_units          = ms
+                )
+
+                // report trial summary
+                report ('Outcome: $TRIAL_outcome | RT: $TRIAL_RT_ms ms | measured SOA: $TRIAL_SOA_true_ms ms')
+                report ('Hit: $INFO_hit | Miss: $INFO_miss | FA: $INFO_falseAlarm | CR: $INFO_correctRejection | Early: $INFO_earlyResponse | FixBreak: $INFO_fixationBreak')
+
+                direct (INITIATE_RDP)
+            }
+
+            // ------------------------------------------------------------------------------------
+            state EXPERIMENT_EXIT {
+
+                report ('EXPERIMENT COMPLETED!')
+                report ('EXITING ...')
+
+                wait (
+                    duration                = 1000*1000 - CTRL_frame_buffer_us + (next_frame_time() - now())
+                    duration_units          = us
+                )
+
+                dequeue_stimulus (fixationPoint)
+
+                update_stimulus_display ()
+
+                // stop devices
+                stop_device_io (gamePad)
+
+                if (EXP_use_eye_tracking == 1) {
+                    stop_device_io (Eyelink)
+                }
+
+                yield ()
+            }
+        }
+    }
+}
