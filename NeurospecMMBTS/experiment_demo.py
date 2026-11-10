@@ -39,7 +39,6 @@ Author. :   Maximilian Hohmann
 # ----- SETUP ---------------------------------------------
 
 from pathlib import Path
-import sys
 import time
 
 

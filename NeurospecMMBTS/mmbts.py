@@ -1,5 +1,5 @@
 # ---------------------------------------------------------
-# MMBTS
+#   MMBTS
 # ---------------------------------------------------------
 """
 This module provides code for using the MMBT-S Trigger Box 
@@ -26,9 +26,15 @@ Author:     Maximilian Hohmann
 """
 
 
+
+# ----- SETUP ---------------------------------------------
+
 import serial
 import serial.tools.list_ports
 
+
+
+# ----- MMBT-S Module -------------------------------------
 
 class MMBTS:
 
@@ -200,3 +206,4 @@ class MMBTS:
 
         return
 
+    
